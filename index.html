@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>テキストチェッカー</title>
+<style>
+:root{
+  --bg:#f7f7f5;--panel:#ffffff;--ink:#1d1f23;--sub:#6b7078;--line:#d9dbdf;
+  --hit-line:#fff6d6;--mark:#ffd84d;--mark-ink:#1d1f23;--cur:#ff7a3d;--cur-ink:#ffffff;--err:#c0392b;--accent:#2457c5;
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#16181c;--panel:#1e2126;--ink:#e6e8eb;--sub:#9aa0a8;--line:#33373e;
+    --hit-line:#3a3417;--mark:#b8921a;--mark-ink:#ffffff;--cur:#e8602a;--cur-ink:#ffffff;--err:#ff7b6b;--accent:#7aa2ff;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16181c;--panel:#1e2126;--ink:#e6e8eb;--sub:#9aa0a8;--line:#33373e;
+  --hit-line:#3a3417;--mark:#b8921a;--mark-ink:#ffffff;--cur:#e8602a;--cur-ink:#ffffff;--err:#ff7b6b;--accent:#7aa2ff;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",system-ui,sans-serif}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--panel);z-index:10}
+header{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 12px;display:grid;gap:8px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select,input[type=search]{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:6px 10px;min-height:36px}
+button{cursor:pointer}
+button:hover{border-color:var(--accent)}
+button:focus-visible,select:focus-visible,input:focus-visible,label:focus-within{outline:2px solid var(--accent);outline-offset:1px}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+input[type=search]{flex:1 1 180px;min-width:0;font-family:ui-monospace,Menlo,Consolas,monospace}
+input[type=search].bad{border-color:var(--err)}
+label.chk{display:inline-flex;gap:6px;align-items:center;color:var(--sub);cursor:pointer}
+#fileinfo{color:var(--sub);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 120px;min-width:0}
+#status{font-variant-numeric:tabular-nums;font-size:14px;min-width:9em}
+#status.err{color:var(--err)}
+main{padding:0}
+#view{font:13px/1.55 ui-monospace,Menlo,Consolas,"Noto Sans Mono CJK JP",monospace;padding:6px 0 40vh}
+.ln{display:flex;border-bottom:1px solid transparent}
+.ln.hit{background:var(--hit-line)}
+.no{flex:0 0 4.2em;text-align:right;padding:0 10px 0 4px;color:var(--sub);user-select:none;border-right:1px solid var(--line)}
+.ln.hit .no{color:var(--ink);font-weight:700}
+.tx{flex:1;min-width:0;padding:0 10px;white-space:pre-wrap;overflow-wrap:anywhere;min-height:1.55em}
+mark{background:var(--mark);color:var(--mark-ink);border-radius:2px;padding:0}
+mark.cur{background:var(--cur);color:var(--cur-ink);outline:2px solid var(--cur);outline-offset:0}
+#drop{margin:14px 12px;padding:40px 16px;border:2px dashed var(--line);border-radius:10px;text-align:center;color:var(--sub)}
+body.dragging #drop,body.dragging #view{outline:3px dashed var(--accent);outline-offset:-6px}
+@media (prefers-reduced-motion:no-preference){mark.cur{transition:background .15s}}
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <button class="primary" id="open">ファイルを開く</button>
+    <input type="file" id="file" hidden>
+    <select id="enc" aria-label="文字コード">
+      <option value="utf-8">UTF-8</option>
+      <option value="shift_jis">Shift_JIS</option>
+      <option value="euc-jp">EUC-JP</option>
+      <option value="utf-16le">UTF-16 LE</option>
+    </select>
+    <span id="fileinfo">未選択</span>
+  </div>
+  <div class="row">
+    <input type="search" id="q" placeholder="検索(大文字小文字は区別しません)" autocomplete="off" spellcheck="false" aria-label="検索語">
+    <label class="chk"><input type="checkbox" id="re"> 正規表現</label>
+  </div>
+  <div class="row">
+    <button id="prev" aria-label="前の該当箇所">前へ</button>
+    <button id="next" aria-label="次の該当箇所">次へ</button>
+    <span id="status" aria-live="polite">-</span>
+  </div>
+</header>
+<main>
+  <div id="drop">ここにファイルをドロップするか、「ファイルを開く」を押してください。<br>テキスト系のファイルを端末内だけで読み込みます(送信されません)。</div>
+  <div id="view" hidden></div>
+</main>
+<script>
+(function(){
+  var $=function(id){return document.getElementById(id)};
+  var fileEl=$("file"),encEl=$("enc"),qEl=$("q"),reEl=$("re"),statusEl=$("status"),viewEl=$("view"),dropEl=$("drop"),infoEl=$("fileinfo");
+  var buffer=null,lines=[],marks=[],cur=-1,timer=null;
+
+  function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+  function setStatus(t,err){statusEl.textContent=t;statusEl.className=err?"err":""}
+
+  function decode(){
+    if(!buffer)return;
+    var text;
+    try{text=new TextDecoder(encEl.value).decode(buffer)}catch(e){setStatus("この文字コードでは読めません",true);return}
+    lines=text.split(/\r\n|\r|\n/);
+    render();
+  }
+
+  function buildRegex(){
+    var q=qEl.value;
+    qEl.classList.remove("bad");
+    if(!q)return null;
+    try{
+      return new RegExp(reEl.checked?q:q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"gi");
+    }catch(e){
+      qEl.classList.add("bad");
+      setStatus("正規表現が正しくありません",true);
+      return false;
+    }
+  }
+
+  function render(){
+    if(!buffer)return;
+    var rx=buildRegex();
+    if(rx===false){return}
+    var out=[],hitLines=0;
+    for(var i=0;i<lines.length;i++){
+      var line=lines[i],html="",hit=false;
+      if(rx){
+        var last=0,m;
+        rx.lastIndex=0;
+        while((m=rx.exec(line))!==null){
+          if(m[0].length===0){rx.lastIndex++;continue}
+          html+=esc(line.slice(last,m.index))+"<mark>"+esc(m[0])+"</mark>";
+          last=m.index+m[0].length;
+          hit=true;
+        }
+        html+=esc(line.slice(last));
+      }else{html=esc(line)}
+      if(hit)hitLines++;
+      out.push('<div class="ln'+(hit?" hit":"")+'"><span class="no">'+(i+1)+'</span><span class="tx">'+html+"</span></div>");
+    }
+    viewEl.innerHTML=out.join("");
+    viewEl.hidden=false;dropEl.hidden=true;
+    marks=Array.prototype.slice.call(viewEl.querySelectorAll("mark"));
+    cur=-1;
+    if(!rx){setStatus(lines.length+" 行");return}
+    if(!marks.length){setStatus("該当なし(0件)");return}
+    go(0,hitLines);
+  }
+
+  function lineOf(el){return el.closest(".ln").querySelector(".no").textContent}
+
+  function go(i,hitLines){
+    if(!marks.length)return;
+    if(cur>=0&&marks[cur])marks[cur].classList.remove("cur");
+    cur=(i+marks.length)%marks.length;
+    var el=marks[cur];
+    el.classList.add("cur");
+    var hl=document.querySelectorAll(".ln.hit").length;
+    setStatus((cur+1)+" / "+marks.length+"件("+lineOf(el)+"行目・該当"+(hitLines||hl)+"行)");
+    var header=document.querySelector("header").offsetHeight;
+    var r=el.getBoundingClientRect();
+    window.scrollTo({top:window.scrollY+r.top-window.innerHeight/2+header/2,behavior:"auto"});
+  }
+
+  function loadFile(f){
+    if(!f)return;
+    infoEl.textContent=f.name+"(約"+(f.size>1048576?(f.size/1048576).toFixed(1)+" MB":Math.max(1,Math.round(f.size/1024))+" KB")+")";
+    var fr=new FileReader();
+    fr.onload=function(){buffer=fr.result;decode()};
+    fr.onerror=function(){setStatus("ファイルを読み込めませんでした",true)};
+    fr.readAsArrayBuffer(f);
+  }
+
+  $("open").addEventListener("click",function(){fileEl.click()});
+  fileEl.addEventListener("change",function(){loadFile(fileEl.files[0])});
+  encEl.addEventListener("change",decode);
+  reEl.addEventListener("change",render);
+  qEl.addEventListener("input",function(){clearTimeout(timer);timer=setTimeout(render,150)});
+  qEl.addEventListener("keydown",function(e){
+    if(e.key==="Enter"){e.preventDefault();clearTimeout(timer);if(marks.length&&!e.isComposing)go(cur+(e.shiftKey?-1:1))}
+  });
+  $("next").addEventListener("click",function(){go(cur+1)});
+  $("prev").addEventListener("click",function(){go(cur-1)});
+
+  ["dragenter","dragover"].forEach(function(t){window.addEventListener(t,function(e){e.preventDefault();document.body.classList.add("dragging")})});
+  ["dragleave","drop"].forEach(function(t){window.addEventListener(t,function(e){e.preventDefault();document.body.classList.remove("dragging")})});
+  window.addEventListener("drop",function(e){if(e.dataTransfer&&e.dataTransfer.files.length)loadFile(e.dataTransfer.files[0])});
+})();
+</script>
+</body>
+</html>
